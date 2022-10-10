@@ -17,6 +17,10 @@ import (
 var errClosing = errors.New("closing")
 var errCloseConns = errors.New("close conns")
 
+var stdServer *stdserver
+
+var stdUdpServer *stdserver
+
 type stdserver struct {
 	events   Events         // user events
 	loops    []*stdloop     // all the loops
@@ -41,6 +45,17 @@ func (c *stdudpconn) AddrIndex() int             { return c.addrIndex }
 func (c *stdudpconn) LocalAddr() net.Addr        { return c.localAddr }
 func (c *stdudpconn) RemoteAddr() net.Addr       { return c.remoteAddr }
 func (c *stdudpconn) Wake()                      {}
+func (c *stdudpconn) Write(out []byte) (n int, err error) {
+	if stdUdpServer.events.Data != nil {
+		if len(out) > 0 {
+			if stdUdpServer.events.PreWrite != nil {
+				stdUdpServer.events.PreWrite()
+			}
+			return stdUdpServer.lns[c.addrIndex].pconn.WriteTo(out, c.remoteAddr)
+		}
+	}
+	return 0, errors.New("write error")
+}
 
 type stdloop struct {
 	idx   int               // loop index
@@ -70,6 +85,18 @@ func (c *stdconn) AddrIndex() int             { return c.addrIndex }
 func (c *stdconn) LocalAddr() net.Addr        { return c.localAddr }
 func (c *stdconn) RemoteAddr() net.Addr       { return c.remoteAddr }
 func (c *stdconn) Wake()                      { c.loop.ch <- wakeReq{c} }
+func (c *stdconn) Write(out []byte) (n int, err error) {
+	if stdServer.events.Data != nil {
+		if len(out) > 0 {
+			if stdServer.events.PreWrite != nil {
+				stdServer.events.PreWrite()
+			}
+			return c.conn.Write(out)
+		}
+
+	}
+	return 0, errors.New("write error")
+}
 
 type stdin struct {
 	c  *stdconn
@@ -175,6 +202,7 @@ func stdserve(events Events, listeners []*listener) error {
 }
 
 func stdlistenerRun(s *stdserver, ln *listener, lnidx int) {
+	stdServer = s
 	var ferr error
 	defer func() {
 		s.signalShutdown(ferr)
@@ -398,6 +426,7 @@ func stdloopRead(s *stdserver, l *stdloop, c *stdconn, in []byte) error {
 }
 
 func stdloopReadUDP(s *stdserver, l *stdloop, c *stdudpconn) error {
+	stdUdpServer = s
 	if s.events.Data != nil {
 		out, action := s.events.Data(c, c.in)
 		if len(out) > 0 {
