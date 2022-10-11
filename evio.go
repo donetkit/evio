@@ -116,7 +116,7 @@ type Events struct {
 	// and should be closed when it's no longer needed.
 	Detached func(c Conn, rwc io.ReadWriteCloser) (action Action)
 	// PreWrite fires just before any data is written to any client socket.
-	PreWrite func()
+	PreWrite func(c Conn, in []byte, act Action) (out []byte, action Action)
 	// Data fires when a connection sends the server data.
 	// The in parameter is the incoming data.
 	// Use the out return value to write data to the connection.

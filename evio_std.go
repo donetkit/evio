@@ -46,10 +46,11 @@ func (c *stdudpconn) LocalAddr() net.Addr        { return c.localAddr }
 func (c *stdudpconn) RemoteAddr() net.Addr       { return c.remoteAddr }
 func (c *stdudpconn) Wake()                      {}
 func (c *stdudpconn) Write(out []byte) (n int, err error) {
+	action := None
 	if stdUdpServer.events.Data != nil {
 		if len(out) > 0 {
 			if stdUdpServer.events.PreWrite != nil {
-				stdUdpServer.events.PreWrite()
+				stdUdpServer.events.PreWrite(c, out, action)
 			}
 			return stdUdpServer.lns[c.addrIndex].pconn.WriteTo(out, c.remoteAddr)
 		}
@@ -86,10 +87,15 @@ func (c *stdconn) LocalAddr() net.Addr        { return c.localAddr }
 func (c *stdconn) RemoteAddr() net.Addr       { return c.remoteAddr }
 func (c *stdconn) Wake()                      { c.loop.ch <- wakeReq{c} }
 func (c *stdconn) Write(out []byte) (n int, err error) {
+	action := None
 	if stdServer.events.Data != nil {
 		if len(out) > 0 {
 			if stdServer.events.PreWrite != nil {
-				stdServer.events.PreWrite()
+				out, action = stdServer.events.PreWrite(c, out, action)
+			}
+			switch action {
+			case Close:
+				stdloopClose(stdServer, nil, c)
 			}
 			return c.conn.Write(out)
 		}
@@ -409,7 +415,7 @@ func stdloopRead(s *stdserver, l *stdloop, c *stdconn, in []byte) error {
 		out, action := s.events.Data(c, in)
 		if len(out) > 0 {
 			if s.events.PreWrite != nil {
-				s.events.PreWrite()
+				out, action = s.events.PreWrite(c, out, action)
 			}
 			c.conn.Write(out)
 		}
@@ -431,7 +437,7 @@ func stdloopReadUDP(s *stdserver, l *stdloop, c *stdudpconn) error {
 		out, action := s.events.Data(c, c.in)
 		if len(out) > 0 {
 			if s.events.PreWrite != nil {
-				s.events.PreWrite()
+				out, action = s.events.PreWrite(c, out, action)
 			}
 			s.lns[c.addrIndex].pconn.WriteTo(out, c.remoteAddr)
 		}
@@ -465,7 +471,7 @@ func stdloopAccept(s *stdserver, l *stdloop, c *stdconn) error {
 		out, opts, action := s.events.Opened(c)
 		if len(out) > 0 {
 			if s.events.PreWrite != nil {
-				s.events.PreWrite()
+				out, action = s.events.PreWrite(c, out, action)
 			}
 			c.conn.Write(out)
 		}

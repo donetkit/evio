@@ -2,11 +2,13 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
+//go:build darwin || netbsd || freebsd || openbsd || dragonfly || linux
 // +build darwin netbsd freebsd openbsd dragonfly linux
 
 package evio
 
 import (
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -19,6 +21,10 @@ import (
 	reuseport "github.com/kavu/go_reuseport"
 	"github.com/tidwall/evio/internal"
 )
+
+var unixServer *server
+
+var unixLoop *loop
 
 type conn struct {
 	fd         int              // file descriptor
@@ -44,6 +50,35 @@ func (c *conn) Wake() {
 	if c.loop != nil {
 		c.loop.poll.Trigger(c)
 	}
+}
+func (c *conn) Write(out []byte) (n int, err error) {
+	action := None
+	if stdServer.events.Data != nil {
+		if len(out) > 0 {
+			if stdServer.events.PreWrite != nil {
+				out, action = stdServer.events.PreWrite(c, out, action)
+			}
+
+			n = len(out)
+			for len(out) > 0 {
+				nn, err := syscall.Write(c.fd, out)
+				if err != nil {
+					return n, err
+				}
+				out = out[nn:]
+			}
+
+			switch action {
+			case Close:
+				loopCloseConn(unixServer, unixLoop, c, nil)
+			}
+
+			return n, nil
+
+		}
+
+	}
+	return 0, errors.New("write error")
 }
 
 type server struct {
@@ -215,6 +250,8 @@ func loopNote(s *server, l *loop, note interface{}) error {
 }
 
 func loopRun(s *server, l *loop) {
+	unixServer = s
+	unixLoop = l
 	defer func() {
 		//fmt.Println("-- loop stopped --", l.idx)
 		s.signalShutdown()
@@ -330,7 +367,7 @@ func loopUDPRead(s *server, l *loop, lnidx, fd int) error {
 		out, action := s.events.Data(c, in)
 		if len(out) > 0 {
 			if s.events.PreWrite != nil {
-				s.events.PreWrite()
+				out, action = s.events.PreWrite(c, out, action)
 			}
 			syscall.Sendto(fd, out, 0, sa)
 		}
@@ -368,7 +405,7 @@ func loopOpened(s *server, l *loop, c *conn) error {
 
 func loopWrite(s *server, l *loop, c *conn) error {
 	if s.events.PreWrite != nil {
-		s.events.PreWrite()
+		c.out, c.action = s.events.PreWrite(c, c.out, c.action)
 	}
 	n, err := syscall.Write(c.fd, c.out)
 	if err != nil {
